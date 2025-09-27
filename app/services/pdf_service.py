@@ -359,7 +359,8 @@ class PDFService:
         self, 
         html_content: str, 
         output_filename: Optional[str] = None,
-        from_string: bool = True
+        from_string: bool = True,
+        stories: Optional[List[dict]] = None
     ) -> str:
         """
         Convert HTML to PDF using ReportLab
@@ -368,6 +369,7 @@ class PDFService:
             html_content: HTML string or file path
             output_filename: Custom filename for the PDF (optional)
             from_string: True if html_content is a string, False if it's a file path
+            stories: Optional list of stories with page_number and text
             
         Returns:
             str: Path to the generated PDF file
@@ -399,17 +401,21 @@ class PDFService:
             # Parse CSS styles
             css_styles = self._parse_css(soup)
             
-            # Check for image containers
+            # Check for story pages (your HTML structure)
+            story_pages = soup.find_all('div', class_='story-page')
             image_containers = soup.find_all('div', class_='image-container')
+            
+            # Use story pages if available, otherwise fall back to image containers
+            containers_to_process = story_pages if story_pages else image_containers
             
             # Compute maximum image width (for fallback, not used in dynamic sizing)
             max_image_width = A4[0] - (0.75 * inch + 0.75 * inch)
             
             # Create PDF document with dynamic page sizing
-            # For image containers, we'll use custom page sizes
-            if image_containers:
+            # For story pages or image containers, we'll use custom page sizes
+            if containers_to_process:
                 # Generate PDF with dynamic page sizes for each image
-                self._generate_dynamic_image_pdf(output_path, image_containers, max_image_width, css_styles)
+                self._generate_dynamic_image_pdf(output_path, containers_to_process, max_image_width, css_styles, stories)
                 logger.info(f"Dynamic PDF successfully generated: {output_path}")
                 return output_path
             
@@ -579,7 +585,7 @@ class PDFService:
             logger.error(error_msg)
             raise HTTPException(status_code=500, detail=error_msg)
     
-    def _generate_dynamic_image_pdf(self, output_path, image_containers, max_image_width, css_styles):
+    def _generate_dynamic_image_pdf(self, output_path, image_containers, max_image_width, css_styles, stories=None):
         """
         Generate PDF with truly dynamic page sizes based on image dimensions
         """
@@ -592,37 +598,48 @@ class PDFService:
         max_containers = min(len(image_containers), 20)
         logger.info(f"Generating dynamic PDF with {max_containers} image containers")
         
+        # Create stories mapping by page number
+        stories_by_page = {}
+        if stories:
+            for story in stories:
+                stories_by_page[story.get('page_number', 1)] = story.get('text', '')
+            logger.info(f"Created stories mapping for {len(stories_by_page)} pages")
+        
         # Create a new PDF with dynamic page sizes
         c = canvas.Canvas(output_path)
         
         for i in range(max_containers):
             container = image_containers[i]
-            logger.info(f"Processing image container {i+1}/{max_containers}")
+            page_number = i + 1
+            logger.info(f"Processing image container {page_number}/{max_containers}")
             
             try:
                 # Start a new page (except for the first one)
                 if i > 0:
                     c.showPage()
                 
-                # Draw the content directly on the canvas with exact image dimensions
-                self._draw_image_page(c, container, None, css_styles)
+                # Get story text for this page
+                story_text = stories_by_page.get(page_number, '')
                 
-                logger.info(f"Added page {i+1} with exact image dimensions")
+                # Draw the content directly on the canvas with exact image dimensions
+                self._draw_image_page(c, container, None, css_styles, story_text)
+                
+                logger.info(f"Added page {page_number} with exact image dimensions")
                     
             except Exception as e:
-                logger.warning(f"Error processing container {i+1}: {e}")
+                logger.warning(f"Error processing container {page_number}: {e}")
                 continue
         
         # Save the PDF
         c.save()
         logger.info(f"Dynamic PDF generated successfully: {output_path}")
     
-    def _draw_image_page(self, canvas, container, page_size, css_styles):
+    def _draw_image_page(self, canvas, container, page_size, css_styles, story_text=''):
         """
         Draw an image page directly on the canvas with the specified size
         """
         try:
-            # Find the background image
+            # Find the background image (could be in story-page or image-container)
             bg_img = container.find('img', class_='background-image')
             if not bg_img:
                 return
@@ -666,67 +683,130 @@ class PDFService:
                 preserveAspectRatio=False  # Fill the entire page exactly
             )
             
-            # Draw overlay content
-            self._draw_overlay_content(canvas, container, target_width, target_height, css_styles)
+            # Draw overlay content (text blocks, page numbers, etc.)
+            self._draw_overlay_content(canvas, container, target_width, target_height, css_styles, story_text)
             
         except Exception as e:
             logger.warning(f"Error drawing image page: {e}")
     
-    def _draw_overlay_content(self, canvas, container, width, height, css_styles):
+    def _draw_overlay_content(self, canvas, container, width, height, css_styles, story_text=''):
         """
         Draw overlay text and metadata on the canvas
         """
         try:
-            # Extract overlay content
-            overlay_content = container.find('div', class_='overlay-content')
-            if not overlay_content:
-                return
+            # Debug: Log what we're looking for
+            logger.info(f"Looking for text elements in container: {container.name if hasattr(container, 'name') else 'Unknown'}")
             
-            # Draw main overlay text
-            overlay_text_elem = overlay_content.find('div', class_='overlay-text')
-            if overlay_text_elem:
-                text = overlay_text_elem.get_text().strip()
-                if text:
-                    # Set font and color
-                    canvas.setFont("Helvetica-Bold", 16)
-                    canvas.setFillColorRGB(1, 1, 1)  # White text
-                    
-                    # Draw text in center
-                    text_width = canvas.stringWidth(text, "Helvetica-Bold", 16)
-                    text_x = (width - text_width) / 2
-                    text_y = height * 0.6
-                    
-                    # Draw text background
-                    canvas.setFillColorRGB(0, 0, 0)  # Black background
-                    canvas.setFillAlpha(0.8)
-                    canvas.rect(text_x - 10, text_y - 5, text_width + 20, 30, fill=1)
-                    
-                    # Draw text
-                    canvas.setFillColorRGB(1, 1, 1)  # White text
-                    canvas.drawString(text_x, text_y, text)
+            # Priority 1: Use story_text from API request if available
+            text_to_draw = story_text.strip() if story_text else ''
             
-            # Draw metadata items
-            metadata_items = []
-            for class_name in ['overlay-scene', 'overlay-visuals', 'overlay-model']:
-                elem = overlay_content.find('div', class_=class_name)
-                if elem:
-                    metadata_items.append(elem.get_text().strip())
-            
-            if metadata_items:
-                canvas.setFont("Helvetica", 12)
-                y_pos = height * 0.3
+            # Priority 2: Fall back to HTML structure if no story_text
+            if not text_to_draw:
+                text_block = container.find('div', class_='text-block')
+                page_number = container.find('div', class_='page-number')
                 
-                for i, item in enumerate(metadata_items):
-                    if item:
-                        # Draw metadata background
-                        canvas.setFillColorRGB(0, 0, 0)
-                        canvas.setFillAlpha(0.7)
-                        canvas.rect(10, y_pos - 5, width - 20, 20, fill=1)
+                logger.info(f"Found text_block: {text_block is not None}")
+                logger.info(f"Found page_number: {page_number is not None}")
+                
+                if text_block:
+                    text_to_draw = text_block.get_text().strip()
+            
+            # Draw text if we have any
+            if text_to_draw:
+                # Set font and color for text block - make it bold and larger for better visibility
+                canvas.setFont("Helvetica-Bold", 16)
+                canvas.setFillColorRGB(0, 0, 0)  # Black text
+                
+                # Split text into lines if too long
+                words = text_to_draw.split()
+                lines = []
+                current_line = ""
+                for word in words:
+                    if len(current_line + " " + word) < 45:  # Longer lines since we have more space
+                        current_line += " " + word if current_line else word
+                    else:
+                        lines.append(current_line)
+                        current_line = word
+                if current_line:
+                    lines.append(current_line)
+                
+                # Position text block at bottom center area
+                text_y = 50  # Bottom area
+                
+                # Draw each line centered from bottom up
+                for i, line in enumerate(lines[:3]):  # Limit to 3 lines for bottom positioning
+                    # Center the text horizontally
+                    text_width = canvas.stringWidth(line, "Helvetica-Bold", 16)
+                    text_x = (width - text_width) / 2  # Center horizontally
+                    canvas.drawString(text_x, text_y + (i * 20), line)
+            
+            # Draw page number (fallback to HTML if no story_text)
+            page_number_elem = container.find('div', class_='page-number')
+            if page_number_elem and not text_to_draw:
+                page_num_text = page_number_elem.get_text().strip()
+                if page_num_text:
+                    # Set font and color for page number
+                    canvas.setFont("Helvetica-Bold", 16)
+                    canvas.setFillColorRGB(0, 0, 0)  # Black text
+                    
+                    # Position page number at bottom right
+                    text_width = canvas.stringWidth(page_num_text, "Helvetica-Bold", 16)
+                    text_x = width - text_width - 20  # Right margin
+                    text_y = 30  # Bottom area
+                    
+                    canvas.drawString(text_x, text_y, page_num_text)
+            
+            # Fallback: If no text found at all, draw a test text
+            if not text_to_draw and not page_number_elem:
+                logger.info("No text elements found, drawing test text")
+                canvas.setFont("Helvetica-Bold", 16)
+                canvas.setFillColorRGB(0, 0, 0)  # Black text
+                
+                # Center the test text
+                test_text1 = "TEST TEXT - This should be visible"
+                test_text2 = f"Page size: {width:.1f}x{height:.1f}"
+                
+                text_width1 = canvas.stringWidth(test_text1, "Helvetica-Bold", 16)
+                text_width2 = canvas.stringWidth(test_text2, "Helvetica-Bold", 16)
+                
+                canvas.drawString((width - text_width1) / 2, 50, test_text1)
+                canvas.drawString((width - text_width2) / 2, 70, test_text2)
+            
+            # Fallback: Handle old overlay-content structure
+            overlay_content = container.find('div', class_='overlay-content')
+            if overlay_content and not text_to_draw:
+                # Draw main overlay text
+                overlay_text_elem = overlay_content.find('div', class_='overlay-text')
+                if overlay_text_elem:
+                    text = overlay_text_elem.get_text().strip()
+                    if text:
+                        # Set font and color
+                        canvas.setFont("Helvetica-Bold", 16)
+                        canvas.setFillColorRGB(0, 0, 0)  # Black text
                         
-                        # Draw metadata text
-                        canvas.setFillColorRGB(1, 1, 1)
-                        canvas.drawString(20, y_pos, item)
-                        y_pos -= 30
+                        # Center the text at bottom
+                        text_width = canvas.stringWidth(text, "Helvetica-Bold", 16)
+                        text_x = (width - text_width) / 2
+                        text_y = 50
+                        canvas.drawString(text_x, text_y, text)
+                
+                # Draw metadata items
+                metadata_items = []
+                for class_name in ['overlay-scene', 'overlay-visuals', 'overlay-model']:
+                    elem = overlay_content.find('div', class_=class_name)
+                    if elem:
+                        metadata_items.append(elem.get_text().strip())
+                
+                if metadata_items:
+                    canvas.setFont("Helvetica-Bold", 14)
+                    canvas.setFillColorRGB(0, 0, 0)  # Black text
+                    
+                    for i, item in enumerate(metadata_items):
+                        if item:
+                            # Center each metadata item
+                            item_width = canvas.stringWidth(item, "Helvetica-Bold", 14)
+                            item_x = (width - item_width) / 2
+                            canvas.drawString(item_x, 90 + (i * 20), item)
                         
         except Exception as e:
             logger.warning(f"Error drawing overlay content: {e}")

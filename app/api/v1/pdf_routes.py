@@ -65,7 +65,8 @@ async def generate_pdf_from_html(
         pdf_path = pdf_service.html_to_pdf_reportlab(
             html_content=request.html_content,
             output_filename=request.filename,
-            from_string=True
+            from_string=True,
+            stories=request.stories
         )
         
         # Extract filename from path

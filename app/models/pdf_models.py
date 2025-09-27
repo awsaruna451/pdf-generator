@@ -1,9 +1,26 @@
 """
 Pydantic models for PDF generation API
 """
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field, validator
 import re
+
+
+class Story(BaseModel):
+    """Model for individual story page"""
+    
+    page_number: int = Field(
+        ..., 
+        description="Page number for this story",
+        ge=1,
+        example=1
+    )
+    text: str = Field(
+        ..., 
+        description="Text content for this page",
+        min_length=1,
+        example="Once upon a time, in a magical forest..."
+    )
 
 
 class PDFGenerationRequest(BaseModel):
@@ -14,6 +31,14 @@ class PDFGenerationRequest(BaseModel):
         description="HTML content to convert to PDF",
         min_length=1,
         example="<html><body><h1>Hello World</h1><p>This is a test PDF.</p></body></html>"
+    )
+    stories: Optional[List[Story]] = Field(
+        None,
+        description="Array of stories with page numbers and text content",
+        example=[
+            {"page_number": 1, "text": "Once upon a time..."},
+            {"page_number": 2, "text": "The adventure continues..."}
+        ]
     )
     filename: Optional[str] = Field(
         None,
