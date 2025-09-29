@@ -7,12 +7,16 @@ import io
 import base64
 import re
 from typing import Optional, Dict, List, Tuple
+from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
 from fastapi import HTTPException
 import logging
 from bs4 import BeautifulSoup
@@ -31,13 +35,22 @@ class PDFService:
             output_dir: Directory to store generated PDFs
         """
         self.output_dir = output_dir
+        self.custom_font_available = False
         self._ensure_output_dir()
+        
+        # Register custom fonts
+        self._register_custom_fonts()
     
     def _ensure_output_dir(self) -> None:
         """Ensure output directory exists"""
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-            logger.info(f"Created output directory: {self.output_dir}")
+    
+    def _register_custom_fonts(self):
+        """Use consistent built-in font for all text"""
+        # Use Times-Bold for all text consistently
+        self.custom_font_available = False
+        logger.info("Using built-in Times-Bold font consistently across all pages")
     
     def _parse_css(self, soup: BeautifulSoup) -> Dict[str, Dict[str, str]]:
         """
@@ -602,8 +615,13 @@ class PDFService:
         stories_by_page = {}
         if stories:
             for story in stories:
-                stories_by_page[story.get('page_number', 1)] = story.get('text', '')
+                page_num = story.page_number  # Access attribute directly, not dict
+                text = story.text  # Access attribute directly, not dict
+                stories_by_page[page_num] = text
+                logger.info(f"Mapped page {page_num}: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             logger.info(f"Created stories mapping for {len(stories_by_page)} pages")
+        else:
+            logger.info("No stories provided in request")
         
         # Create a new PDF with dynamic page sizes
         c = canvas.Canvas(output_path)
@@ -620,6 +638,7 @@ class PDFService:
                 
                 # Get story text for this page
                 story_text = stories_by_page.get(page_number, '')
+                logger.info(f"Page {page_number} story_text: '{story_text[:50] if story_text else 'EMPTY'}{'...' if len(story_text) > 50 else ''}'")
                 
                 # Draw the content directly on the canvas with exact image dimensions
                 self._draw_image_page(c, container, None, css_styles, story_text)
@@ -699,6 +718,7 @@ class PDFService:
             
             # Priority 1: Use story_text from API request if available
             text_to_draw = story_text.strip() if story_text else ''
+            logger.info(f"Story text for drawing: '{text_to_draw[:50] if text_to_draw else 'EMPTY'}{'...' if len(text_to_draw) > 50 else ''}'")
             
             # Priority 2: Fall back to HTML structure if no story_text
             if not text_to_draw:
@@ -713,44 +733,75 @@ class PDFService:
             
             # Draw text if we have any
             if text_to_draw:
-                # Set font and color for text block - make it bold and larger for better visibility
-                canvas.setFont("Helvetica-Bold", 16)
-                canvas.setFillColorRGB(0, 0, 0)  # Black text
+                # Determine text type and apply appropriate styling
+                text_lower = text_to_draw.lower()
                 
-                # Split text into lines if too long
+                # Use ONLY Times-Bold font consistently across all pages
+                font_name = "Times-Bold"  # Single consistent font for everything
+                
+                # Use consistent font size for all text (no size variations)
+                font_size = 28  # Single consistent size for all text
+                
+                # Use consistent color for all text (black)
+                canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black color for all text
+                
+                # Set the consistent font
+                canvas.setFont(font_name, font_size)
+                
+                # Split text into lines based on actual text width (much better than character count)
                 words = text_to_draw.split()
                 lines = []
                 current_line = ""
+                
+                # Calculate maximum line width (90% of page width for better readability)
+                max_line_width = width * 0.9
+                
                 for word in words:
-                    if len(current_line + " " + word) < 45:  # Longer lines since we have more space
-                        current_line += " " + word if current_line else word
+                    test_line = current_line + " " + word if current_line else word
+                    test_width = canvas.stringWidth(test_line, font_name, font_size)
+                    
+                    if test_width <= max_line_width:
+                        current_line = test_line
                     else:
-                        lines.append(current_line)
+                        if current_line:  # Only append if current_line is not empty
+                            lines.append(current_line)
                         current_line = word
+                
+                # Add the last line
                 if current_line:
                     lines.append(current_line)
                 
-                # Position text block at bottom center area
-                text_y = 50  # Bottom area
+                # Position text block at bottom center area with dynamic spacing
+                line_spacing = font_size * 1.4  # Better spacing based on font size
                 
-                # Draw each line centered from bottom up
-                for i, line in enumerate(lines[:3]):  # Limit to 3 lines for bottom positioning
+                # Allow more lines for longer text (up to 6 lines instead of 3)
+                max_lines = min(6, len(lines))
+                
+                # Calculate starting Y position to accommodate all lines (start higher, go down)
+                total_text_height = max_lines * line_spacing
+                text_y = 60 + total_text_height  # Start higher to accommodate downward text
+                
+                # Draw each line centered, going DOWN from the starting position
+                for i, line in enumerate(lines[:max_lines]):
                     # Center the text horizontally
-                    text_width = canvas.stringWidth(line, "Helvetica-Bold", 16)
+                    text_width = canvas.stringWidth(line, font_name, font_size)
                     text_x = (width - text_width) / 2  # Center horizontally
-                    canvas.drawString(text_x, text_y + (i * 20), line)
+                    canvas.drawString(text_x, text_y - (i * line_spacing), line)  # SUBTRACT to go DOWN
             
             # Draw page number (fallback to HTML if no story_text)
             page_number_elem = container.find('div', class_='page-number')
             if page_number_elem and not text_to_draw:
                 page_num_text = page_number_elem.get_text().strip()
                 if page_num_text:
-                    # Set font and color for page number
-                    canvas.setFont("Helvetica-Bold", 16)
-                    canvas.setFillColorRGB(0, 0, 0)  # Black text
+                    # Set consistent font and color for page number
+                    font_name = "Times-Bold"  # Same font as all other text
+                    font_size = 28  # Same size as all other text
+                    canvas.setFont(font_name, font_size)  # Consistent font across all pages
+                    # Black color (same as all other text)
+                    canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black color
                     
                     # Position page number at bottom right
-                    text_width = canvas.stringWidth(page_num_text, "Helvetica-Bold", 16)
+                    text_width = canvas.stringWidth(page_num_text, font_name, font_size)
                     text_x = width - text_width - 20  # Right margin
                     text_y = 30  # Bottom area
                     
@@ -759,18 +810,22 @@ class PDFService:
             # Fallback: If no text found at all, draw a test text
             if not text_to_draw and not page_number_elem:
                 logger.info("No text elements found, drawing test text")
-                canvas.setFont("Helvetica-Bold", 16)
-                canvas.setFillColorRGB(0, 0, 0)  # Black text
                 
-                # Center the test text
+                # Center the test text with title styling
                 test_text1 = "TEST TEXT - This should be visible"
                 test_text2 = f"Page size: {width:.1f}x{height:.1f}"
                 
-                text_width1 = canvas.stringWidth(test_text1, "Helvetica-Bold", 16)
-                text_width2 = canvas.stringWidth(test_text2, "Helvetica-Bold", 16)
+                # Consistent styling for test text
+                font_name = "Times-Bold"  # Same font as all other text
+                font_size = 28  # Same size as all other text
+                canvas.setFont(font_name, font_size)  # Consistent font across all pages
+                canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black color (same as all other text)
+                
+                text_width1 = canvas.stringWidth(test_text1, font_name, font_size)
+                text_width2 = canvas.stringWidth(test_text2, font_name, font_size)
                 
                 canvas.drawString((width - text_width1) / 2, 50, test_text1)
-                canvas.drawString((width - text_width2) / 2, 70, test_text2)
+                canvas.drawString((width - text_width2) / 2, 80, test_text2)
             
             # Fallback: Handle old overlay-content structure
             overlay_content = container.find('div', class_='overlay-content')
@@ -780,12 +835,14 @@ class PDFService:
                 if overlay_text_elem:
                     text = overlay_text_elem.get_text().strip()
                     if text:
-                        # Set font and color
-                        canvas.setFont("Helvetica-Bold", 16)
-                        canvas.setFillColorRGB(0, 0, 0)  # Black text
+                        # Consistent font and color for overlay text
+                        font_name = "Times-Bold"  # Same font as all other text
+                        font_size = 28  # Same size as all other text
+                        canvas.setFont(font_name, font_size)  # Consistent font across all pages
+                        canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black color (same as all other text)
+                        text_width = canvas.stringWidth(text, font_name, font_size)
                         
                         # Center the text at bottom
-                        text_width = canvas.stringWidth(text, "Helvetica-Bold", 16)
                         text_x = (width - text_width) / 2
                         text_y = 50
                         canvas.drawString(text_x, text_y, text)
@@ -798,15 +855,18 @@ class PDFService:
                         metadata_items.append(elem.get_text().strip())
                 
                 if metadata_items:
-                    canvas.setFont("Helvetica-Bold", 14)
-                    canvas.setFillColorRGB(0, 0, 0)  # Black text
+                    # Use consistent font for metadata
+                    font_name = "Times-Bold"  # Same font as all other text
+                    font_size = 28  # Same size as all other text
+                    canvas.setFont(font_name, font_size)  # Consistent font across all pages
+                    canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black color (same as all other text)
                     
                     for i, item in enumerate(metadata_items):
                         if item:
                             # Center each metadata item
-                            item_width = canvas.stringWidth(item, "Helvetica-Bold", 14)
+                            item_width = canvas.stringWidth(item, font_name, font_size)
                             item_x = (width - item_width) / 2
-                            canvas.drawString(item_x, 90 + (i * 20), item)
+                            canvas.drawString(item_x, 90 + (i * 25), item)
                         
         except Exception as e:
             logger.warning(f"Error drawing overlay content: {e}")
