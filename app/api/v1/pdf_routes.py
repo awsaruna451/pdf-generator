@@ -12,7 +12,9 @@ from app.models.pdf_models import (
     PDFGenerationFromFileRequest,
     PDFGenerationResponse,
     ErrorResponse,
-    HealthCheckResponse
+    HealthCheckResponse,
+    SimpleStorybookRequest,
+    KDPStorybookRequest
 )
 from app.services.pdf_service import PDFService
 
@@ -255,4 +257,349 @@ async def list_pdfs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list PDFs: {str(e)}"
+        )
+
+
+@router.post(
+    "/generate-storybook-enhanced",
+    response_model=PDFGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate Children's Storybook PDF", 
+    description="""
+    Generate a comprehensive children's storybook PDF with enhanced features.
+    **Uses the SAME request format as /pdf/generate endpoint.**
+    
+    Perfect for Amazon KDP publishing. Creates:
+    - **Title page** with auto-generated metadata
+    - **Story pages** with text and auto-generated illustration prompts  
+    - **Professional formatting** optimized for children's books
+    
+    **Request Format (identical to /pdf/generate):**
+    ```json
+    {
+      "html_content": "<!DOCTYPE html>...",
+      "stories": [
+        {"page_number": 1, "text": "Once upon a time..."},
+        {"page_number": 2, "text": "The adventure continues..."}
+      ],
+      "filename": "my_storybook"
+    }
+    ```
+    
+    The endpoint automatically generates illustration prompts for each page based on the story text.
+    """,
+    responses={
+        201: {
+            "description": "Storybook PDF generated successfully",
+            "model": PDFGenerationResponse
+        },
+        400: {
+            "description": "Invalid request data",
+            "model": ErrorResponse
+        },
+        500: {
+            "description": "Internal server error during PDF generation",
+            "model": ErrorResponse
+        }
+    }
+)
+async def generate_storybook_pdf(
+    request: PDFGenerationRequest,  # Use same model as /generate endpoint
+    token: Optional[str] = Depends(security)
+):
+    """
+    Generate a professional children's storybook PDF suitable for Amazon KDP publishing.
+    
+    Uses the same request format as /generate but creates an enhanced storybook with:
+    - Title page featuring metadata (auto-generated from filename)
+    - Individual story pages with text and illustration prompts  
+    - Professional layout optimized for children's book publishing
+    
+    Args:
+        request: PDFGenerationRequest (same as /generate endpoint)
+        token: Optional authentication token
+        
+    Returns:
+        PDFGenerationResponse: Success response with download details
+        
+    Raises:
+        HTTPException: If PDF generation fails or invalid data provided
+    """
+    try:
+        # Use the same format as /generate endpoint with html_content and stories
+        from app.models.pdf_models import BookMetadata, StorybookPage
+        
+        # Extract basic info or use defaults
+        title = request.filename or "Generated Storybook"
+        
+        # Create default metadata from request
+        default_metadata = BookMetadata(
+            title=title.replace("_", " ").title(),
+            author="Generated Author",
+            age_range="All Ages", 
+            theme="Adventure and Learning",
+            moral_lesson="Every story teaches us something new."
+        )
+        
+        # Extract images from HTML content
+        images = pdf_service._extract_images_from_html(request.html_content)
+        
+        # Convert stories to storybook pages
+        stories = request.stories or []
+        pages = []
+        
+        for i, story in enumerate(stories):
+            page = StorybookPage(
+                page_number=story.page_number,
+                story_text=story.text,
+                illustration_prompt=f"Illustration for page {story.page_number} - create a suitable children's book image based on the story text: {story.text[:100]}..."
+            )
+            
+            # Attach image data if available for this page (use index-based mapping)
+            if i < len(images):  # Use story index instead of page_number
+                page.image_data = images[i]  # Map by order: first story gets first image, etc.
+            
+            pages.append(page)
+        
+        # If no stories provided, create a simple page from HTML content
+        if not pages:
+            pages = [StorybookPage(
+                page_number=1,
+                story_text="Welcome to your storybook!",
+                illustration_prompt="A welcoming scene for a children's storybook, bright and colorful."
+            )]
+        
+        filename = request.filename or "simple_storybook"
+        
+        # Generate the storybook PDF
+        result = await pdf_service.generate_storybook_pdf(
+            metadata=default_metadata,
+            pages=pages,
+            filename=filename
+        )
+        
+        return PDFGenerationResponse(
+            success=True,
+            message="Storybook PDF generated successfully",
+            filename=result["filename"],
+            file_path=result["file_path"],
+            download_url=f"/pdf/download/{result['filename']}"
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request data: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate storybook PDF: {str(e)}"
+        )
+
+
+@router.post(
+    "/generate-storybook-simple",
+    response_model=PDFGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate Storybook from Simple Request", 
+    description="""
+    Generate a children's storybook PDF from simplified request format.
+    
+    Perfect for single-page story generation with external image URLs.
+    
+    **Request Format:**
+    ```json
+    {
+      "pageNumber": 1,
+      "text": "Kaya the Clever Kangaroo and the Problem-solving and creativity",
+      "imageUrl": "https://drive.google.com/file/d/1zkXqckTWC6CyoPAGYsaULdttFzvXOhsg/view?usp=drivesdk",
+      "filename": "kaya_kangaroo_story"
+    }
+    ```
+    
+    Features:
+    - **Auto-downloads images** from URLs (including Google Drive)
+    - **Professional children's book layout** with image and text
+    - **Title page generation** from story content
+    - **Optimized for Amazon KDP** publishing
+    """,
+    responses={
+        201: {
+            "description": "Storybook PDF generated successfully",
+            "model": PDFGenerationResponse
+        },
+        400: {
+            "description": "Invalid request data",
+            "model": ErrorResponse
+        },
+        500: {
+            "description": "Internal server error during PDF generation",
+            "model": ErrorResponse
+        }
+    }
+)
+async def generate_simple_storybook_pdf(
+    request: SimpleStorybookRequest,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Generate a professional children's storybook PDF from simplified request.
+    
+    Downloads the image from the provided URL and creates a professional
+    storybook layout with title page and story content.
+    
+    Args:
+        request: SimpleStorybookRequest with pageNumber, text, imageUrl, and optional filename
+        token: Optional authentication token
+        
+    Returns:
+        PDFGenerationResponse: Success response with download details
+        
+    Raises:
+        HTTPException: If PDF generation fails or invalid data provided
+    """
+    try:
+        # Generate the simple storybook PDF
+        result = await pdf_service.generate_simple_storybook_pdf(
+            page_number=request.pageNumber,
+            text=request.text,
+            image_url=request.imageUrl,
+            filename=request.filename
+        )
+        
+        return PDFGenerationResponse(
+            success=True,
+            message="Simple storybook PDF generated successfully",
+            filename=result["filename"],
+            file_path=result["file_path"],
+            download_url=f"/pdf/download/{result['filename']}"
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request data: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate simple storybook PDF: {str(e)}"
+        )
+
+
+@router.post(
+    "/generate-kdp-storybook",
+    response_model=PDFGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate KDP-Ready Children's Storybook PDF", 
+    description="""
+    Generate a professional children's storybook PDF optimized for Amazon KDP publishing.
+    
+    Supports different page types with appropriate layouts:
+    - **Cover pages**: Prominent title overlaid on cover image
+    - **Story pages**: Text overlaid on illustrations with adjustable transparency
+    - **End pages**: "The End" and moral lesson overlaid on images
+    
+    **Request Format:**
+    ```json
+    {
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "cover",
+          "text": "The Adventures of Kaya the Kangaroo",
+          "image_url": "https://example.com/cover.jpg"
+        },
+        {
+          "page_number": 2,
+          "page_type": "story",
+          "text": "Once upon a time, in a magical forest...",
+          "image_url": "https://example.com/story1.jpg"
+        },
+        {
+          "page_number": 3,
+          "page_type": "end",
+          "text": "Always be kind and help others in need.",
+          "image_url": "https://example.com/end.jpg"
+        }
+      ],
+      "filename": "kaya_adventures",
+      "text_overlay_opacity": 0.7
+    }
+    ```
+    
+    Features:
+    - **Square format** (8.5" x 8.5") perfect for children's books
+    - **High-quality** 300 DPI for print
+    - **Child-friendly fonts** (26-34pt) Georgia/serif with proper margins
+    - **Fluffy cloud-shaped text overlays** with organic, whimsical design
+    - **Semi-transparent clouds** (40-60% opacity) showing background watercolor scenes
+    - **Asymmetrical cloud puffs** for natural, dreamy storybook aesthetic
+    - **Subtle drop shadows** (0, 3, 12px) for depth and dimension
+    - **Auto-downloads and resizes images** maintaining aspect ratio
+    - **Professional text positioning** with generous padding inside cloud boundaries
+    """,
+    responses={
+        201: {
+            "description": "KDP storybook PDF generated successfully",
+            "model": PDFGenerationResponse
+        },
+        400: {
+            "description": "Invalid request data",
+            "model": ErrorResponse
+        },
+        500: {
+            "description": "Internal server error during PDF generation",
+            "model": ErrorResponse
+        }
+    }
+)
+async def generate_kdp_storybook_pdf(
+    request: KDPStorybookRequest,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Generate a professional KDP-ready children's storybook PDF.
+    
+    Creates a complete storybook with different page types:
+    - Cover pages with prominent titles and cover images
+    - Story pages with readable text and illustrations
+    - End pages with moral lessons and decorative elements
+    
+    Args:
+        request: KDPStorybookRequest with array of pages and optional filename
+        token: Optional authentication token
+        
+    Returns:
+        PDFGenerationResponse: Success response with download details
+        
+    Raises:
+        HTTPException: If PDF generation fails or invalid data provided
+    """
+    try:
+        # Generate the KDP storybook PDF
+        result = await pdf_service.generate_kdp_storybook_pdf(
+            pages=request.pages,
+            filename=request.filename,
+            text_overlay_opacity=request.text_overlay_opacity
+        )
+        
+        return PDFGenerationResponse(
+            success=True,
+            message="KDP storybook PDF generated successfully",
+            filename=result["filename"],
+            file_path=result["file_path"],
+            download_url=f"/pdf/download/{result['filename']}"
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request data: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate KDP storybook PDF: {str(e)}"
         )
