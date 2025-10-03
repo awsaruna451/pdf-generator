@@ -14,9 +14,12 @@ from app.models.pdf_models import (
     ErrorResponse,
     HealthCheckResponse,
     SimpleStorybookRequest,
-    KDPStorybookRequest
+    KDPStorybookRequest,
+    VideoGenerationRequest,
+    VideoGenerationResponse
 )
 from app.services.pdf_service import PDFService
+from app.services.video_service import VideoGenerationService
 
 # Initialize router
 router = APIRouter(prefix="/pdf", tags=["PDF Generation"])
@@ -602,4 +605,104 @@ async def generate_kdp_storybook_pdf(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate KDP storybook PDF: {str(e)}"
+        )
+
+
+@router.post("/generate-video", response_model=VideoGenerationResponse)
+async def generate_video_from_pdf(
+    request: VideoGenerationRequest,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Generate video from PDF with text-to-speech narration
+    
+    This endpoint converts a PDF file to a video with voice narration for each page.
+    Supports both regular text-to-speech and voice cloning.
+    
+    Args:
+        request: Video generation request with PDF path, page texts, and options
+        token: Optional authentication token
+        
+    Returns:
+        VideoGenerationResponse: Success status and video file information
+        
+    Raises:
+        HTTPException: If video generation fails or dependencies not available
+    """
+    try:
+        # Check if video dependencies are available
+        try:
+            video_service = VideoGenerationService()
+        except ImportError as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Video generation dependencies not available: {str(e)}"
+            )
+        
+        # Validate PDF file exists
+        if not os.path.exists(request.pdf_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"PDF file not found: {request.pdf_path}"
+            )
+        
+        # Generate output filename if not provided
+        output_filename = request.output_filename
+        if not output_filename:
+            pdf_name = os.path.splitext(os.path.basename(request.pdf_path))[0]
+            output_filename = f"{pdf_name}_video"
+        
+        # Add .mp4 extension if not present
+        if not output_filename.endswith('.mp4'):
+            output_filename += '.mp4'
+        
+        # Create output directory if it doesn't exist
+        output_dir = "output"
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_filename)
+
+        request.voice_file = "/Users/arunakumara/git/pdf-generator/voice/story_voice.mp3"
+        
+        # Generate video based on whether voice file is provided
+        if request.voice_file and os.path.exists(request.voice_file):
+            # Use voice cloning
+            result = video_service.generate_video_with_voice_clone(
+                pdf_path=request.pdf_path,
+                page_texts=request.page_texts,
+                voice_file=request.voice_file,
+                output_file=output_path,
+                fps=request.fps
+            )
+        else:
+            # Use regular text-to-speech
+            result = video_service.generate_video_with_tts(
+                pdf_path=request.pdf_path,
+                page_texts=request.page_texts,
+                output_file=output_path,
+                language=request.language,
+                fps=request.fps,
+                skip_cover_page=request.skip_cover_page
+            )
+        
+        if not result["success"]:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Video generation failed: {result.get('error', 'Unknown error')}"
+            )
+        
+        return VideoGenerationResponse(
+            success=True,
+            message="Video generated successfully",
+            filename=output_filename,
+            file_path=result["file_path"],
+            download_url=f"/pdf/download/{output_filename}",
+            duration_seconds=result.get("duration_seconds")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate video: {str(e)}"
         )

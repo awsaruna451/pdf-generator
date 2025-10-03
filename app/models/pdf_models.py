@@ -370,6 +370,74 @@ class KDPStorybookRequest(BaseModel):
         return v
 
 
+class VideoGenerationRequest(BaseModel):
+    """Request model for video generation from PDF"""
+    
+    pdf_path: str = Field(
+        ...,
+        description="Path to the PDF file to convert to video",
+        example="output/my_storybook.pdf"
+    )
+    page_texts: List[str] = Field(
+        ...,
+        description="List of text strings for each page narration (excluding cover page)",
+        min_items=1,
+        example=["Once upon a time...", "The adventure continues..."]
+    )
+    voice_file: Optional[str] = Field(
+        None,
+        description="Path to reference voice audio file for voice cloning (optional)",
+        example="voice_samples/my_voice.mp3"
+    )
+    output_filename: Optional[str] = Field(
+        None,
+        description="Output video filename (without extension)",
+        max_length=100,
+        example="my_storybook_video"
+    )
+    language: str = Field(
+        "en",
+        description="Language code for text-to-speech",
+        example="en"
+    )
+    fps: int = Field(
+        24,
+        description="Frames per second for the video",
+        ge=1,
+        le=60,
+        example=24
+    )
+    skip_cover_page: bool = Field(
+        True,
+        description="Whether to skip voiceover for the cover page",
+        example=True
+    )
+    
+    @validator('output_filename')
+    def validate_output_filename(cls, v):
+        """Validate output filename to ensure it's safe"""
+        if v is not None:
+            # Remove any potentially dangerous characters
+            v = re.sub(r'[^\w\-_.]', '_', v)
+            if not v:
+                raise ValueError('Output filename cannot be empty after sanitization')
+        return v
+
+
+class VideoGenerationResponse(BaseModel):
+    """Response model for video generation"""
+    
+    success: bool = Field(..., description="Whether the video was generated successfully")
+    message: str = Field(..., description="Success or error message")
+    filename: str = Field(..., description="Generated video filename")
+    file_path: str = Field(..., description="Full path to the generated video file")
+    download_url: str = Field(..., description="URL to download the generated video")
+    duration_seconds: Optional[float] = Field(
+        None,
+        description="Duration of the generated video in seconds"
+    )
+
+
 class HealthCheckResponse(BaseModel):
     """Health check response model"""
     

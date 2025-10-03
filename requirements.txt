@@ -7,6 +7,16 @@ pydantic-settings==2.2.1
 # PDF generation
 reportlab==4.0.9
 
+# Image processing
+Pillow==10.1.0
+
+# Video generation dependencies
+pdf2image==1.17.0
+gtts==2.4.0
+moviepy==1.0.3
+torch>=2.0.0
+TTS==0.22.0
+
 # Additional utilities
 python-multipart==0.0.6
 python-jose[cryptography]==3.3.0
