@@ -268,6 +268,11 @@ class KDPStorybookPage(BaseModel):
         ge=0,
         example=0
     )
+    title_color: Optional[str] = Field(
+        None,
+        description="Optional cover title color in hex (e.g., #F3C35A). If not provided, color is auto-selected based on background.",
+        example="#F3C35A"
+    )
     page_type: str = Field(
         ...,
         description="Type of page: cover, story, or end",
@@ -337,6 +342,42 @@ class KDPStorybookRequest(BaseModel):
         ge=0.0,
         le=1.0,
         example=0.7
+    )
+    page_width: Optional[float] = Field(
+        612.0,
+        description="Page width in points (default: 612pt = 8.5 inches)",
+        gt=0,
+        example=612.0
+    )
+    page_height: Optional[float] = Field(
+        792.0,
+        description="Page height in points (default: 792pt = 11 inches)",
+        gt=0,
+        example=792.0
+    )
+    title_color: Optional[str] = Field(
+        None,
+        description="Global title color for cover page in hex format (e.g., #F3C35A). If not provided, color is auto-selected based on background.",
+        example="#F3C35A"
+    )
+    title_font_size: Optional[int] = Field(
+        None,
+        description="Global title font size for cover page in points. If not provided, size is auto-calculated based on title length.",
+        ge=20,
+        le=500,
+        example=130
+    )
+    text_font_size: Optional[int] = Field(
+        None,
+        description="Global text font size for story and end pages in points. If not provided, uses default size.",
+        ge=12,
+        le=500,
+        example=36
+    )
+    text_color: Optional[str] = Field(
+        None,
+        description="Global text color for story and end pages in hex format (e.g., #000000). If not provided, uses default black color.",
+        example="#000000"
     )
     
     @validator('pages')

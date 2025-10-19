@@ -585,7 +585,13 @@ async def generate_kdp_storybook_pdf(
         result = await pdf_service.generate_kdp_storybook_pdf(
             pages=request.pages,
             filename=request.filename,
-            text_overlay_opacity=request.text_overlay_opacity
+            text_overlay_opacity=request.text_overlay_opacity,
+            page_width=request.page_width,
+            page_height=request.page_height,
+            title_color=request.title_color,
+            title_font_size=request.title_font_size,
+            text_font_size=request.text_font_size,
+            text_color=request.text_color
         )
         
         return PDFGenerationResponse(
