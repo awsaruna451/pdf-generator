@@ -16,7 +16,8 @@ from app.models.pdf_models import (
     SimpleStorybookRequest,
     KDPStorybookRequest,
     VideoGenerationRequest,
-    VideoGenerationResponse
+    VideoGenerationResponse,
+    VideoStatusResponse
 )
 from app.services.pdf_service import PDFService
 from app.services.video_service import VideoGenerationService
@@ -701,7 +702,7 @@ async def generate_video_from_pdf(
             message="Video generated successfully",
             filename=output_filename,
             file_path=result["file_path"],
-            download_url=f"/pdf/download/{output_filename}",
+            download_url=f"/pdf/video/download/{output_filename}",
             duration_seconds=result.get("duration_seconds")
         )
         
@@ -711,4 +712,137 @@ async def generate_video_from_pdf(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate video: {str(e)}"
+        )
+
+
+@router.get(
+    "/video/status/{filename}",
+    response_model=VideoStatusResponse,
+    summary="Check Video Status",
+    description="Check the status and details of a generated video file"
+)
+async def check_video_status(
+    filename: str,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Check the status of a video file
+    
+    Args:
+        filename: Name of the video file to check
+        token: Optional authentication token
+        
+    Returns:
+        VideoStatusResponse: Status information about the video file
+    """
+    try:
+        # Sanitize filename
+        import re
+        safe_filename = re.sub(r'[^\w\-_.]', '_', filename)
+        if not safe_filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid filename"
+            )
+        
+        # Ensure .mp4 extension
+        if not safe_filename.endswith('.mp4'):
+            safe_filename += '.mp4'
+        
+        # Check if file exists in output directory
+        output_dir = "output"
+        file_path = os.path.join(output_dir, safe_filename)
+        file_exists = os.path.exists(file_path)
+        
+        response_data = {
+            "success": True,
+            "message": "Video status retrieved successfully",
+            "filename": safe_filename,
+            "file_path": file_path,
+            "exists": file_exists,
+            "download_url": f"/pdf/video/download/{safe_filename}"
+        }
+        
+        if file_exists:
+            # Get file size
+            file_size = os.path.getsize(file_path)
+            response_data["file_size"] = file_size
+            
+            # Try to get video duration using moviepy
+            try:
+                from moviepy.editor import VideoFileClip
+                with VideoFileClip(file_path) as video:
+                    duration = video.duration
+                    response_data["duration_seconds"] = duration
+            except Exception:
+                # If we can't get duration, just skip it
+                pass
+        
+        return VideoStatusResponse(**response_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check video status: {str(e)}"
+        )
+
+
+@router.get(
+    "/video/download/{filename}",
+    summary="Download Video",
+    description="Download a generated video file"
+)
+async def download_video(
+    filename: str,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Download a video file
+    
+    Args:
+        filename: Name of the video file to download
+        token: Optional authentication token
+        
+    Returns:
+        FileResponse: The video file for download
+    """
+    try:
+        # Sanitize filename
+        import re
+        safe_filename = re.sub(r'[^\w\-_.]', '_', filename)
+        if not safe_filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid filename"
+            )
+        
+        # Ensure .mp4 extension
+        if not safe_filename.endswith('.mp4'):
+            safe_filename += '.mp4'
+        
+        # Check if file exists in output directory
+        output_dir = "output"
+        file_path = os.path.join(output_dir, safe_filename)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Video file not found: {safe_filename}"
+            )
+        
+        # Return the file for download
+        return FileResponse(
+            path=file_path,
+            filename=safe_filename,
+            media_type="video/mp4"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download video: {str(e)}"
         )

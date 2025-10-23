@@ -479,6 +479,25 @@ class VideoGenerationResponse(BaseModel):
     )
 
 
+class VideoStatusResponse(BaseModel):
+    """Response model for video status check"""
+    
+    success: bool = Field(..., description="Whether the request was successful")
+    message: str = Field(..., description="Status message")
+    filename: str = Field(..., description="Video filename")
+    file_path: str = Field(..., description="Full path to the video file")
+    exists: bool = Field(..., description="Whether the video file exists")
+    file_size: Optional[int] = Field(
+        None,
+        description="File size in bytes if file exists"
+    )
+    duration_seconds: Optional[float] = Field(
+        None,
+        description="Duration of the video in seconds if available"
+    )
+    download_url: str = Field(..., description="URL to download the video")
+
+
 class HealthCheckResponse(BaseModel):
     """Health check response model"""
     
