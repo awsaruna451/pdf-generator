@@ -1897,11 +1897,11 @@ class PDFService:
         try:
             # Generate filename if not provided
             if not filename:
-                # Extract title from first cover page
+                # Extract title from first cover page (if available)
                 cover_page = next((p for p in pages if p.page_type == "cover"), None)
-                if cover_page:
-                    title_words = cover_page.text.split()[:4]  # First 4 words
-                    title = " ".join(title_words)
+                if cover_page and getattr(cover_page, "text", None):
+                    title_words = (cover_page.text or "").split()[:4]  # First 4 words
+                    title = " ".join(title_words) or "kdp_storybook"
                     filename = re.sub(r'[^\w\-_.]', '_', title.lower())
                     filename = f"{filename}_kdp_storybook"
                 else:
@@ -1931,22 +1931,29 @@ class PDFService:
                         page_font_size = getattr(page, 'text_font_size', None) or (36 if page.page_type == "story" else 34)
                         page_text_color = getattr(page, 'text_color', None) or "#000000"
                         
-                        if page.page_type == "story":
-                            composite_image = self._create_fluffy_cloud_overlay(
-                                image_data, page.text, font_size=page_font_size,
-                                opacity=text_overlay_opacity, position="top", text_color=page_text_color
-                            )
-                        else:  # end page
-                            composite_image = self._create_fluffy_cloud_overlay(
-                                image_data, page.text, font_size=page_font_size,
-                                opacity=text_overlay_opacity, position="center", text_color=page_text_color
-                            )
-                        
-                        # Convert composite image to base64 for ReportLab
-                        import base64
-                        image_base64 = base64.b64encode(composite_image).decode('utf-8')
-                        page.image_data = f"data:image/jpeg;base64,{image_base64}"
-                        logger.info(f"Created fluffy cloud overlay for page {page.page_number}: {len(composite_image)} bytes")
+                        # Only create text overlay if there is actual text
+                        page_text = (page.text or "").strip()
+                        if page_text:
+                            if page.page_type == "story":
+                                composite_image = self._create_fluffy_cloud_overlay(
+                                    image_data, page_text, font_size=page_font_size,
+                                    opacity=text_overlay_opacity, position="top", text_color=page_text_color
+                                )
+                            else:  # end page
+                                composite_image = self._create_fluffy_cloud_overlay(
+                                    image_data, page_text, font_size=page_font_size,
+                                    opacity=text_overlay_opacity, position="center", text_color=page_text_color
+                                )
+                            
+                            # Convert composite image to base64 for ReportLab
+                            import base64
+                            image_base64 = base64.b64encode(composite_image).decode('utf-8')
+                            page.image_data = f"data:image/jpeg;base64,{image_base64}"
+                            logger.info(f"Created fluffy cloud overlay for page {page.page_number}: {len(composite_image)} bytes")
+                        else:
+                            # No text provided → keep raw image without cloud overlay
+                            page.image_data = image_data
+                            logger.info(f"No text for page {page.page_number}, using raw image without overlay")
                 else:
                     page.image_data = None
                     logger.warning(f"Could not download image for page {page.page_number}: {page.image_url}")
@@ -2096,34 +2103,37 @@ class PDFService:
             canvas.circle(width * 0.6, height * 0.18, 6, fill=1, stroke=0)
             canvas.circle(width * 0.4, height * 0.15, 7, fill=1, stroke=0)
             
-            # Create an attractive title area with decorative background
-            title_area_x = width * 0.1
-            title_area_y = height * 0.6
-            title_area_width = width * 0.8
-            title_area_height = 120
-            
-            # Draw decorative title background (cloud-like shape)
-            canvas.setFillColorRGB(1.0, 1.0, 1.0)  # White background
-            # Multiple overlapping circles for fluffy cloud effect
-            for i in range(8):
-                offset_x = i * (title_area_width / 8)
-                canvas.circle(title_area_x + offset_x, title_area_y, 30, fill=1, stroke=0)
-                canvas.circle(title_area_x + offset_x + 15, title_area_y + 15, 25, fill=1, stroke=0)
-            
-            # Add title text with shadow effect (like the reference)
-            canvas.setFont("Times-Bold", 32)
-            canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black shadow
-            title_text = page.text
-            title_width = canvas.stringWidth(title_text, "Times-Bold", 32)
-            title_x = title_area_x + (title_area_width - title_width) / 2
-            title_y = title_area_y + 40
-            
-            # Draw shadow
-            canvas.drawString(title_x + 2, title_y - 2, title_text)
-            
-            # Draw main title text
-            canvas.setFillColorRGB(0.1, 0.5, 0.1)  # Dark green (like the reference)
-            canvas.drawString(title_x, title_y, title_text)
+            # Check if title should be printed
+            printtitle = getattr(page, 'printtitle', True)  # Default to True if not specified
+            if printtitle:
+                # Create an attractive title area with decorative background
+                title_area_x = width * 0.1
+                title_area_y = height * 0.6
+                title_area_width = width * 0.8
+                title_area_height = 120
+                
+                # Draw decorative title background (cloud-like shape)
+                canvas.setFillColorRGB(1.0, 1.0, 1.0)  # White background
+                # Multiple overlapping circles for fluffy cloud effect
+                for i in range(8):
+                    offset_x = i * (title_area_width / 8)
+                    canvas.circle(title_area_x + offset_x, title_area_y, 30, fill=1, stroke=0)
+                    canvas.circle(title_area_x + offset_x + 15, title_area_y + 15, 25, fill=1, stroke=0)
+                
+                # Add title text with shadow effect (like the reference)
+                canvas.setFont("Times-Bold", 32)
+                canvas.setFillColorRGB(0.0, 0.0, 0.0)  # Black shadow
+                title_text = page.text
+                title_width = canvas.stringWidth(title_text, "Times-Bold", 32)
+                title_x = title_area_x + (title_area_width - title_width) / 2
+                title_y = title_area_y + 40
+                
+                # Draw shadow
+                canvas.drawString(title_x + 2, title_y - 2, title_text)
+                
+                # Draw main title text
+                canvas.setFillColorRGB(0.1, 0.5, 0.1)  # Dark green (like the reference)
+                canvas.drawString(title_x, title_y, title_text)
             
             # Add author name in decorative box (like the reference)
             author_x = width * 0.7
@@ -2158,6 +2168,12 @@ class PDFService:
         with subtle outline and soft shadow. Auto color chosen from background
         brightness to ensure contrast. Up to 3 wrapped lines, centered.
         """
+        
+        # Check if title should be printed
+        printtitle = getattr(page, 'printtitle', True)  # Default to True if not specified
+        if not printtitle:
+            logger.info("Skipping cover title overlay - printtitle is False")
+            return
 
         # Title text
         title_text = page.text
@@ -2226,10 +2242,14 @@ class PDFService:
         title_lines = self._wrap_text_to_lines(canvas, title_text, "Times-Bold", title_font_size, max_width)
         title_lines = title_lines[:3]
 
-        # Vertical placement (center of page)
+        # Vertical placement (bottom of page with margin)
         line_height = title_font_size + 20
         total_height = len(title_lines) * line_height
-        start_y = (height + total_height) / 2  # Center vertically
+        bottom_margin = height * 0.08  # 8% margin from bottom
+        # Calculate start_y so the last line (bottom line) is at bottom_margin
+        # Last line is at index (len(title_lines) - 1), so:
+        # start_y - (len(title_lines) - 1) * line_height = bottom_margin
+        start_y = bottom_margin + (len(title_lines) - 1) * line_height
 
         # Draw each line with shadow and outline, then fill
         for line_idx, line in enumerate(title_lines):
@@ -2368,8 +2388,34 @@ class PDFService:
             text_y = height / 2
             canvas.drawString(text_x, text_y, "End Image Not Available")
         
+        # Add "~The End~" text at bottom center
+        self._draw_the_end_text(canvas, width, height)
+        
         # Add "Powered by @freemindAI" branding at bottom center
         self._draw_freemind_branding(canvas, width, height)
+    
+    def _draw_the_end_text(self, canvas, width, height):
+        """Draw '~The End~' text at bottom center of end page"""
+        
+        # Set font and color for "The End" text
+        canvas.setFont("Times-Bold", 32)
+        canvas.setFillColorRGB(0.2, 0.2, 0.2)  # Dark gray for good visibility
+        
+        # "The End" text
+        the_end_text = "~The End~"
+        
+        # Calculate position (bottom center, above branding)
+        text_width = canvas.stringWidth(the_end_text, "Times-Bold", 32)
+        text_x = (width - text_width) / 2
+        text_y = 65  # Position above branding (25 + 18 + 22 for spacing)
+        
+        # Draw the text with a subtle shadow for depth
+        canvas.setFillColorRGB(0.1, 0.1, 0.1)  # Shadow color
+        canvas.drawString(text_x + 2, text_y - 2, the_end_text)
+        
+        # Draw main text
+        canvas.setFillColorRGB(0.2, 0.2, 0.2)  # Main text color
+        canvas.drawString(text_x, text_y, the_end_text)
     
     def _draw_freemind_branding(self, canvas, width, height):
         """Draw 'Powered by @freemindAI' branding at bottom center of end page"""

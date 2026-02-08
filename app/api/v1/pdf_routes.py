@@ -2,10 +2,13 @@
 PDF generation API routes
 """
 import os
+import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer
+
+logger = logging.getLogger(__name__)
 
 from app.models.pdf_models import (
     PDFGenerationRequest,
@@ -17,7 +20,8 @@ from app.models.pdf_models import (
     KDPStorybookRequest,
     VideoGenerationRequest,
     VideoGenerationResponse,
-    VideoStatusResponse
+    VideoStatusResponse,
+    CleanupResponse
 )
 from app.services.pdf_service import PDFService
 from app.services.video_service import VideoGenerationService
@@ -615,6 +619,111 @@ async def generate_kdp_storybook_pdf(
         )
 
 
+@router.post(
+    "/generate-kdp-storybook-from-images",
+    response_model=PDFGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate KDP Storybook PDF (Image-Driven)",
+    description="""
+    Generate a KDP-ready children's storybook PDF **driven primarily by images**.
+
+    This endpoint accepts the **same request format** as `/generate-kdp-storybook`
+    and uses the provided `image_url` values to build the book. It also respects
+    the `printtitle` flag on cover pages:
+
+    - `printtitle: true`  → cover title is rendered using the `text` field
+    - `printtitle: false` → cover title is **not** rendered; only the image is used
+
+    Example request:
+
+    ```json
+    {
+      "pages": [
+        {
+          "page_number": 0,
+          "page_type": "cover",
+          "text": "Bella the Brave Bunny's Big Adventure",
+          "image_url": "https://example.com/cover.jpg",
+          "printtitle": false
+        },
+        {
+          "page_number": 1,
+          "page_type": "story",
+          "text": "Once upon a time...",
+          "image_url": "https://example.com/page1.jpg"
+        }
+      ],
+      "filename": "bella_the_brave_bunnys_big_adventure",
+      "text_overlay_opacity": 0.6,
+      "page_width": 2550,
+      "page_height": 2550,
+      "title_color": "#FFFFFF",
+      "title_font_size": 200,
+      "text_font_size": 250,
+      "text_color": "#2C2C2C"
+    }
+    ```
+    """,
+    responses={
+        201: {
+            "description": "Image-driven KDP storybook PDF generated successfully",
+            "model": PDFGenerationResponse
+        },
+        400: {
+            "description": "Invalid request data",
+            "model": ErrorResponse
+        },
+        500: {
+            "description": "Internal server error during PDF generation",
+            "model": ErrorResponse
+        }
+    }
+)
+async def generate_kdp_storybook_pdf_from_images(
+    request: KDPStorybookRequest,
+    token: Optional[str] = Depends(security)
+):
+    """
+    Generate a KDP-ready storybook PDF primarily based on the provided images.
+
+    Uses the same `KDPStorybookRequest` as `/generate-kdp-storybook` and reuses
+    the same underlying PDF generation logic. The only behavioral difference is
+    semantic: this endpoint is intended for flows where the **images are primary**
+    and the cover title may optionally be hidden via `printtitle: false`.
+    """
+    try:
+        result = await pdf_service.generate_kdp_storybook_pdf(
+            pages=request.pages,
+            filename=request.filename,
+            text_overlay_opacity=request.text_overlay_opacity,
+            page_width=request.page_width,
+            page_height=request.page_height,
+            title_color=request.title_color,
+            title_font_size=request.title_font_size,
+            text_font_size=request.text_font_size,
+            text_color=request.text_color
+        )
+
+        return PDFGenerationResponse(
+            success=True,
+            message="Image-driven KDP storybook PDF generated successfully",
+            filename=result["filename"],
+            file_path=result["file_path"],
+            download_url=f"/pdf/download/{result['filename']}"
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid request data: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate image-driven KDP storybook PDF: {str(e)}"
+        )
+
+
 @router.post("/generate-video", response_model=VideoGenerationResponse)
 async def generate_video_from_pdf(
     request: VideoGenerationRequest,
@@ -702,7 +811,7 @@ async def generate_video_from_pdf(
             message="Video generated successfully",
             filename=output_filename,
             file_path=result["file_path"],
-            download_url=f"/pdf/video/download/{output_filename}",
+            download_url=f"/pdf/download/{output_filename}",
             duration_seconds=result.get("duration_seconds")
         )
         
@@ -760,7 +869,7 @@ async def check_video_status(
             "filename": safe_filename,
             "file_path": file_path,
             "exists": file_exists,
-            "download_url": f"/pdf/video/download/{safe_filename}"
+            "download_url": f"/pdf/download/{safe_filename}"
         }
         
         if file_exists:
@@ -790,7 +899,7 @@ async def check_video_status(
 
 
 @router.get(
-    "/video/download/{filename}",
+    "/download/{filename}",
     summary="Download Video",
     description="Download a generated video file"
 )
@@ -845,4 +954,124 @@ async def download_video(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to download video: {str(e)}"
+        )
+
+
+@router.delete(
+    "/cleanup",
+    response_model=CleanupResponse,
+    summary="Cleanup Output Files",
+    description="Delete all generated output files (PDFs and videos) from the output directory"
+)
+async def cleanup_output_files(
+    token: Optional[str] = Depends(security)
+):
+    """
+    Clean up all generated output files
+    
+    This endpoint deletes all PDF and video files from the output directory.
+    Useful for freeing up disk space or starting fresh.
+    
+    Args:
+        token: Optional authentication token
+        
+    Returns:
+        CleanupResponse: Summary of deleted files
+    """
+    try:
+        import glob
+        
+        output_dir = "output"
+        if not os.path.exists(output_dir):
+            return CleanupResponse(
+                success=True,
+                message="Output directory does not exist, nothing to clean",
+                files_deleted=0,
+                total_size_bytes=0,
+                deleted_files=[],
+                file_types={}
+            )
+        
+        # Find all files in output directory (excluding directories)
+        all_files = []
+        for file_path in glob.glob(os.path.join(output_dir, "*")):
+            if os.path.isfile(file_path):
+                all_files.append(file_path)
+        
+        if not all_files:
+            return CleanupResponse(
+                success=True,
+                message="No files found in output directory",
+                files_deleted=0,
+                total_size_bytes=0,
+                deleted_files=[],
+                file_types={}
+            )
+        
+        # Track deleted files
+        deleted_files = []
+        total_size = 0
+        file_types_count = {}
+        
+        # Delete each file
+        for file_path in all_files:
+            try:
+                # Get file info before deletion
+                file_size = os.path.getsize(file_path)
+                filename = os.path.basename(file_path)
+                
+                # Determine file type
+                file_ext = os.path.splitext(filename)[1].lower()
+                if file_ext == '.pdf':
+                    file_type = 'pdf'
+                elif file_ext in ['.mp4', '.avi', '.mov', '.mkv']:
+                    file_type = 'video'
+                elif file_ext in ['.mp3', '.wav', '.aac']:
+                    file_type = 'audio'
+                elif file_ext in ['.jpg', '.jpeg', '.png', '.gif']:
+                    file_type = 'image'
+                else:
+                    file_type = 'other'
+                
+                # Count by type
+                file_types_count[file_type] = file_types_count.get(file_type, 0) + 1
+                
+                # Delete the file
+                os.remove(file_path)
+                
+                deleted_files.append(filename)
+                total_size += file_size
+                
+            except Exception as file_error:
+                # Log error but continue with other files
+                logger.warning(f"Failed to delete {file_path}: {file_error}")
+        
+        # Clean up temporary files (e.g., MoviePy temp files)
+        temp_files = glob.glob(os.path.join(output_dir, "*TEMP_*"))
+        for temp_file in temp_files:
+            try:
+                if os.path.isfile(temp_file):
+                    temp_size = os.path.getsize(temp_file)
+                    os.remove(temp_file)
+                    total_size += temp_size
+                    file_types_count['temp'] = file_types_count.get('temp', 0) + 1
+            except Exception:
+                pass
+        
+        return CleanupResponse(
+            success=True,
+            message=f"Successfully cleaned up {len(deleted_files)} file(s)",
+            files_deleted=len(deleted_files),
+            total_size_bytes=total_size,
+            deleted_files=sorted(deleted_files),
+            file_types=file_types_count
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cleanup failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cleanup output files: {str(e)}"
         )

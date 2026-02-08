@@ -273,16 +273,20 @@ class KDPStorybookPage(BaseModel):
         description="Optional cover title color in hex (e.g., #F3C35A). If not provided, color is auto-selected based on background.",
         example="#F3C35A"
     )
+    printtitle: Optional[bool] = Field(
+        True,
+        description="Whether to print the cover page title. Set to false to hide the title on cover pages.",
+        example=True
+    )
     page_type: str = Field(
         ...,
         description="Type of page: cover, story, or end",
         pattern="^(cover|story|end)$",
         example="cover"
     )
-    text: str = Field(
-        ...,
-        description="Text content for this page",
-        min_length=1,
+    text: Optional[str] = Field(
+        None,
+        description="Text content for this page. Optional for image-only flows.",
         example="The Adventures of Kaya the Kangaroo"
     )
     image_url: str = Field(
@@ -386,12 +390,45 @@ class KDPStorybookRequest(BaseModel):
         if not v:
             return v
         
-        # Check for sequential page numbers starting from 0
+        # Check for sequential page numbers
         page_numbers = [page.page_number for page in v]
-        expected_numbers = list(range(0, len(v)))  # Start from 0
+        sorted_page_numbers = sorted(page_numbers)
+        min_page = min(page_numbers)
+        expected_count = len(v)
         
-        if sorted(page_numbers) != expected_numbers:
-            raise ValueError('Page numbers must be sequential starting from 0 (cover page should be 0)')
+        # If pages start from 1, auto-adjust to start from 0
+        if min_page == 1:
+            expected_numbers = list(range(1, expected_count + 1))
+            if sorted_page_numbers == expected_numbers:
+                # Create new page objects with adjusted page numbers
+                adjusted_pages = []
+                has_cover = any(p.page_type == 'cover' for p in v)
+                
+                for i, page in enumerate(v):
+                    # Create new page with adjusted page number
+                    page_dict = page.dict()
+                    page_dict['page_number'] = i
+                    
+                    # If first page is story and no cover exists, convert to cover
+                    if i == 0 and page.page_type == 'story' and not has_cover:
+                        page_dict['page_type'] = 'cover'
+                    
+                    adjusted_pages.append(KDPStorybookPage(**page_dict))
+                
+                # Check for at least one cover page in adjusted pages
+                page_types = [page.page_type for page in adjusted_pages]
+                if 'cover' not in page_types:
+                    raise ValueError('At least one page must be of type "cover"')
+                
+                return adjusted_pages
+            else:
+                raise ValueError(f'Page numbers must be sequential. Expected {expected_numbers}, got {sorted_page_numbers}')
+        elif min_page == 0:
+            expected_numbers = list(range(0, expected_count))
+            if sorted_page_numbers != expected_numbers:
+                raise ValueError(f'Page numbers must be sequential. Expected {expected_numbers}, got {sorted_page_numbers}')
+        else:
+            raise ValueError(f'Page numbers must start from 0 or 1. Got pages starting from {min_page}')
         
         # Check for at least one cover page
         page_types = [page.page_type for page in v]
@@ -504,3 +541,20 @@ class HealthCheckResponse(BaseModel):
     status: str = Field(..., description="Service status")
     message: str = Field(..., description="Health check message")
     version: str = Field(..., description="API version")
+
+
+class CleanupResponse(BaseModel):
+    """Response model for cleanup operation"""
+    
+    success: bool = Field(..., description="Whether the cleanup was successful")
+    message: str = Field(..., description="Cleanup status message")
+    files_deleted: int = Field(..., description="Number of files deleted")
+    total_size_bytes: int = Field(..., description="Total size of deleted files in bytes")
+    deleted_files: List[str] = Field(
+        default_factory=list,
+        description="List of deleted file names"
+    )
+    file_types: dict = Field(
+        default_factory=dict,
+        description="Count of deleted files by type (pdf, video, etc.)"
+    )
