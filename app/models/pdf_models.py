@@ -298,6 +298,25 @@ class KDPStorybookPage(BaseModel):
         None,
         description="Downloaded image data (base64) - populated automatically"
     )
+    text_font_size: Optional[int] = Field(
+        None,
+        description="Font size for text on this page in points. If not provided, uses global text_font_size or default 1500pt.",
+        ge=12,
+        le=2000,
+        example=1500
+    )
+    text_color: Optional[str] = Field(
+        None,
+        description="Text color for this page in hex format (e.g., #000000). If not provided, uses global text_color or default black.",
+        example="#000000"
+    )
+    title_font_size: Optional[int] = Field(
+        None,
+        description="Font size for cover title in points. If not provided, uses global title_font_size or auto-calculated.",
+        ge=20,
+        le=2000,
+        example=130
+    )
     # Cover page specific fields (DEPRECATED - not used in current design)
     # The cover now uses only the 'text' field for the title in a colorful cloud bubble
     author: Optional[str] = Field(
@@ -368,15 +387,15 @@ class KDPStorybookRequest(BaseModel):
         None,
         description="Global title font size for cover page in points. If not provided, size is auto-calculated based on title length.",
         ge=20,
-        le=500,
+        le=2000,  # Allow very large fonts for young children
         example=130
     )
     text_font_size: Optional[int] = Field(
         None,
-        description="Global text font size for story and end pages in points. If not provided, uses default size.",
+        description="Global text font size for story and end pages in points. If not provided, uses default size of 1500pt (optimized for ages 2-6). User can specify any size.",
         ge=12,
-        le=500,
-        example=36
+        le=2000,  # Allow very large fonts for young children
+        example=1500
     )
     text_color: Optional[str] = Field(
         None,

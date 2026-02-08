@@ -366,6 +366,171 @@ class PDFService:
             # Return original image if overlay creation fails
             return background_image_data
     
+    def _create_simple_text_overlay(self, background_image_data: bytes, text: str, 
+                                   font_size: int = 28, position: str = "top", 
+                                   text_color: str = "#000000") -> bytes:
+        """
+        Create a simple text overlay directly on the image without cloud background
+        
+        Args:
+            background_image_data: The background image as bytes
+            text: Text to overlay
+            font_size: Font size for the text
+            position: Position of the text ("top", "center", "bottom")
+            text_color: Hex color for the text (e.g., "#000000")
+            
+        Returns:
+            bytes: The composite image with simple text overlay
+        """
+        try:
+            from PIL import Image as PILImage, ImageDraw, ImageFont, ImageFilter
+            
+            # Load background image
+            bg_image = PILImage.open(io.BytesIO(background_image_data))
+            bg_image = bg_image.convert("RGBA")
+            
+            # Create overlay for text with transparency
+            text_overlay = PILImage.new("RGBA", bg_image.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(text_overlay)
+            
+            # Convert hex color to RGB tuple
+            def hex_to_rgb(hex_color):
+                hex_color = hex_color.strip().lstrip('#')
+                if len(hex_color) == 6:
+                    r = int(hex_color[0:2], 16)
+                    g = int(hex_color[2:4], 16)
+                    b = int(hex_color[4:6], 16)
+                    return (r, g, b)
+                return (0, 0, 0)
+            
+            text_rgb = hex_to_rgb(text_color)
+            
+            # Try to load a bold serif font
+            try:
+                font = ImageFont.truetype("/System/Library/Fonts/Georgia Bold.ttc", font_size)
+            except:
+                try:
+                    font = ImageFont.truetype("/System/Library/Fonts/Times Bold.ttc", font_size)
+                except:
+                    try:
+                        font = ImageFont.truetype("/System/Library/Fonts/Helvetica Bold.ttc", font_size)
+                    except:
+                        try:
+                            font = ImageFont.truetype("/System/Library/Fonts/Georgia.ttc", font_size)
+                        except:
+                            font = ImageFont.load_default()
+            
+            # Calculate text wrapping
+            explicit_lines = text.split('\n')
+            lines = []
+            
+            text_margin = int(bg_image.width * 0.05)
+            max_text_width = bg_image.width - (text_margin * 2)
+            
+            for explicit_line in explicit_lines:
+                if not explicit_line.strip():
+                    lines.append("")
+                    continue
+                    
+                words = explicit_line.split()
+                current_line = []
+                
+                for word in words:
+                    test_line = " ".join(current_line + [word])
+                    bbox = draw.textbbox((0, 0), test_line, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    
+                    if text_width <= max_text_width:
+                        current_line.append(word)
+                    else:
+                        if current_line:
+                            lines.append(" ".join(current_line))
+                            current_line = [word]
+                        else:
+                            lines.append(word)
+                
+                if current_line:
+                    lines.append(" ".join(current_line))
+            
+            # Calculate positioning
+            # Use tighter line height for larger fonts to fit more text
+            if font_size >= 1200:
+                line_height = int(font_size * 1.05)  # Ultra tight for huge fonts (1500pt)
+            elif font_size >= 800:
+                line_height = int(font_size * 1.1)   # Very tight for extra-large fonts (1000pt)
+            elif font_size >= 500:
+                line_height = int(font_size * 1.15)  # Very tight for extra-large fonts (700pt)
+            elif font_size >= 200:
+                line_height = int(font_size * 1.2)   # Tight for large fonts (200-499pt)
+            elif font_size >= 60:
+                line_height = int(font_size * 1.25)  # Standard for medium fonts (60-199pt)
+            else:
+                line_height = int(font_size * 1.3)   # Normal for small fonts (<60pt)
+            total_text_height = len(lines) * line_height
+            
+            if position == "top":
+                text_y = bg_image.height * 0.05
+            elif position == "center":
+                text_y = (bg_image.height - total_text_height) / 2
+            else:
+                text_y = bg_image.height * 0.85 - total_text_height
+            
+            # Draw each line with professional styling
+            for i, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                
+                line_x = int(text_margin)
+                line_y = int(text_y + i * line_height)
+                
+                # Draw text with a subtle outline for definition without bulk
+                # This creates crisp, professional text
+                # Adjust stroke width based on font size for optimal readability
+                if font_size < 60:
+                    stroke_width = 1
+                elif font_size < 120:
+                    stroke_width = 2
+                elif font_size < 250:
+                    stroke_width = 3
+                elif font_size < 500:
+                    stroke_width = 5
+                elif font_size < 800:
+                    stroke_width = 8
+                elif font_size < 1200:
+                    stroke_width = 12
+                else:
+                    stroke_width = 15  # For very large fonts (1500pt+)
+                
+                draw.text(
+                    (line_x, line_y), 
+                    line, 
+                    font=font, 
+                    fill=text_rgb + (255,),  # Fully opaque
+                    stroke_width=stroke_width,
+                    stroke_fill=(255, 255, 255, 200)  # White outline with slight transparency
+                )
+            
+            # Composite text overlay onto background
+            composite = PILImage.alpha_composite(bg_image, text_overlay)
+            final_image = composite.convert("RGB")
+            
+            # Save with maximum quality
+            output_buffer = io.BytesIO()
+            final_image.save(
+                output_buffer, 
+                format="JPEG", 
+                quality=100,
+                subsampling=0,
+                optimize=False
+            )
+            return output_buffer.getvalue()
+            
+        except Exception as e:
+            logger.error(f"Error creating simple text overlay: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return background_image_data
+    
     def _create_fluffy_cloud_overlay(self, background_image_data: bytes, text: str, 
                                    font_size: int = 28, opacity: float = 0.5,
                                    position: str = "top", text_color: str = "#000000") -> bytes:
@@ -422,11 +587,11 @@ class PDFService:
                             font = ImageFont.truetype("/System/Library/Fonts/Times.ttc", font_size)
                         except:
                             try:
-                                # Fallback to Helvetica Bold (rounded sans-serif, bold)
+                                # Fallback to Helvetica Bold
                                 font = ImageFont.truetype("/System/Library/Fonts/Helvetica Bold.ttc", font_size)
                             except:
                                 try:
-                                    # Fallback to Helvetica (rounded sans-serif)
+                                    # Fallback to Helvetica
                                     font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
                                 except:
                                     font = ImageFont.load_default()
@@ -452,23 +617,23 @@ class PDFService:
                 current_line = []
                 
                 # Wrap words for this explicit line
-                for word in words:
-                    test_line = " ".join(current_line + [word])
-                    bbox = draw.textbbox((0, 0), test_line, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    
-                    if text_width <= max_text_width:
-                        current_line.append(word)
-                    else:
-                        if current_line:
-                            lines.append(" ".join(current_line))
-                            current_line = [word]
-                        else:
-                            lines.append(word)
+            for word in words:
+                test_line = " ".join(current_line + [word])
+                bbox = draw.textbbox((0, 0), test_line, font=font)
+                text_width = bbox[2] - bbox[0]
                 
+                if text_width <= max_text_width:
+                    current_line.append(word)
+                else:
+                    if current_line:
+                        lines.append(" ".join(current_line))
+                        current_line = [word]
+                    else:
+                        lines.append(word)
+            
                 # Add the last line from this explicit line
-                if current_line:
-                    lines.append(" ".join(current_line))
+            if current_line:
+                lines.append(" ".join(current_line))
             
             # Limit lines based on position (more lines for center/end pages)
             max_lines = 6 if position == "center" else 4
@@ -1895,6 +2060,12 @@ class PDFService:
             dict: Result with filename and file_path
         """
         try:
+            logger.info(f"=== KDP Storybook PDF Generation Started ===")
+            logger.info(f"Global text_font_size parameter: {text_font_size}pt")
+            logger.info(f"Global text_color parameter: {text_color}")
+            logger.info(f"Global title_font_size parameter: {title_font_size}pt")
+            logger.info(f"Total pages to process: {len(pages)}")
+            
             # Generate filename if not provided
             if not filename:
                 # Extract title from first cover page (if available)
@@ -1916,6 +2087,17 @@ class PDFService:
             
             # Download images and create overlays for all pages
             for page in pages:
+                # Apply global text styling BEFORE creating overlays
+                if page.page_type != "cover":
+                    # Apply global text font size if provided and page doesn't have its own
+                    if text_font_size is not None and page.text_font_size is None:
+                        page.text_font_size = text_font_size
+                        logger.info(f"Applied global text_font_size={text_font_size}pt to page {page.page_number}")
+                    # Apply global text color if provided and page doesn't have its own
+                    if text_color is not None and page.text_color is None:
+                        page.text_color = text_color
+                        logger.info(f"Applied global text_color={text_color} to page {page.page_number}")
+                
                 image_data = self._download_image_from_url(page.image_url)
                 if image_data:
                     # For cover pages, use original image without cloud overlay
@@ -1926,32 +2108,33 @@ class PDFService:
                         page.image_data = f"data:image/jpeg;base64,{image_base64}"
                         logger.info(f"Downloaded cover image for page {page.page_number}: {len(image_data)} bytes")
                     else:
-                        # Create fluffy cloud text overlay for story and end pages
-                        # Use API parameters for font size and color
-                        page_font_size = getattr(page, 'text_font_size', None) or (36 if page.page_type == "story" else 34)
+                        # Create text overlay for story and end pages
+                        # Use page's font size and color (already set above from global params or page-specific)
+                        page_font_size = getattr(page, 'text_font_size', None)
+                        if not page_font_size:
+                            # Only set default if no value provided
+                            page_font_size = 1500  # Default large font for young children
+                        # If user explicitly provides a value, use it (no forcing)
                         page_text_color = getattr(page, 'text_color', None) or "#000000"
+                        
+                        logger.info(f"Page {page.page_number} ({page.page_type}): Using font_size={page_font_size}pt, color={page_text_color}")
                         
                         # Only create text overlay if there is actual text
                         page_text = (page.text or "").strip()
                         if page_text:
-                            if page.page_type == "story":
-                                composite_image = self._create_fluffy_cloud_overlay(
-                                    image_data, page_text, font_size=page_font_size,
-                                    opacity=text_overlay_opacity, position="top", text_color=page_text_color
-                                )
-                            else:  # end page
-                                composite_image = self._create_fluffy_cloud_overlay(
-                                    image_data, page_text, font_size=page_font_size,
-                                    opacity=text_overlay_opacity, position="center", text_color=page_text_color
-                                )
+                            # Use simple text overlay for all story and end pages (consistent styling)
+                            composite_image = self._create_simple_text_overlay(
+                                image_data, page_text, font_size=page_font_size,
+                                position="top", text_color=page_text_color
+                            )
+                            logger.info(f"Created simple text overlay for {page.page_type} page {page.page_number}: {len(composite_image)} bytes with {page_font_size}pt font")
                             
                             # Convert composite image to base64 for ReportLab
                             import base64
                             image_base64 = base64.b64encode(composite_image).decode('utf-8')
                             page.image_data = f"data:image/jpeg;base64,{image_base64}"
-                            logger.info(f"Created fluffy cloud overlay for page {page.page_number}: {len(composite_image)} bytes")
                         else:
-                            # No text provided → keep raw image without cloud overlay
+                            # No text provided → keep raw image without overlay
                             page.image_data = image_data
                             logger.info(f"No text for page {page.page_number}, using raw image without overlay")
                 else:
@@ -2000,30 +2183,23 @@ class PDFService:
             logger.info("Using built-in Times-Bold font consistently across all pages")
             
             for page in pages:
-                logger.info(f"Drawing {page.page_type} page {page.page_number}: {page.text[:50]}...")
+                logger.info(f"Drawing {page.page_type} page {page.page_number}: {page.text[:50] if page.text else 'No text'}...")
                 
                 if page.page_type == "cover":
-                    # Apply global title color to cover page if provided
-                    if title_color and (not hasattr(page, 'title_color') or not page.title_color):
+                    # Apply global title color to cover page if provided and not already set
+                    if title_color is not None and page.title_color is None:
                         page.title_color = title_color
-                    # Apply global title font size to cover page if provided
-                    if title_font_size and (not hasattr(page, 'title_font_size') or not page.title_font_size):
+                    # Apply global title font size to cover page if provided and not already set
+                    if title_font_size is not None and page.title_font_size is None:
                         page.title_font_size = title_font_size
                     self._draw_kdp_cover_page(c, page, page_width, page_height, text_overlay_opacity)
-                elif page.page_type == "story":
-                    # Apply global text styling to story page if provided
-                    if text_font_size and (not hasattr(page, 'text_font_size') or not page.text_font_size):
-                        page.text_font_size = text_font_size
-                    if text_color and (not hasattr(page, 'text_color') or not page.text_color):
-                        page.text_color = text_color
-                    self._draw_kdp_story_page(c, page, page_width, page_height, text_overlay_opacity)
+
                 elif page.page_type == "end":
-                    # Apply global text styling to end page if provided
-                    if text_font_size and (not hasattr(page, 'text_font_size') or not page.text_font_size):
-                        page.text_font_size = text_font_size
-                    if text_color and (not hasattr(page, 'text_color') or not page.text_color):
-                        page.text_color = text_color
+                    # End pages already have text_font_size and text_color applied in the download loop
                     self._draw_kdp_end_page(c, page, page_width, page_height, text_overlay_opacity)
+                else:
+                    # Story pages already have text_font_size and text_color applied in the download loop
+                    self._draw_kdp_story_page(c, page, page_width, page_height, text_overlay_opacity)
                 
                 # Add new page if not the last page
                 if page.page_number < len(pages):
@@ -2134,32 +2310,32 @@ class PDFService:
                 # Draw main title text
                 canvas.setFillColorRGB(0.1, 0.5, 0.1)  # Dark green (like the reference)
                 canvas.drawString(title_x, title_y, title_text)
-            
-            # Add author name in decorative box (like the reference)
-            author_x = width * 0.7
-            author_y = height * 0.15
-            author_width = 100
-            author_height = 40
-            
-            # Draw author background box
-            canvas.setFillColorRGB(0.95, 0.95, 0.9)  # Light beige
-            canvas.roundRect(author_x, author_y, author_width, author_height, 10, fill=1, stroke=1)
-            
-            # Add author text
-            canvas.setFont("Times-Bold", 14)
-            canvas.setFillColorRGB(0.1, 0.5, 0.1)  # Dark green
-            author_text = "Author Name"
-            author_text_width = canvas.stringWidth(author_text, "Times-Bold", 14)
-            author_text_x = author_x + (author_width - author_text_width) / 2
-            canvas.drawString(author_text_x, author_y + 15, author_text)
-            
-            # Add subtitle/tagline at bottom (like the reference)
-            canvas.setFont("Times-Bold", 12)
-            canvas.setFillColorRGB(0.3, 0.3, 0.3)  # Dark gray
-            tagline = "A Magical Adventure Story"
-            tagline_width = canvas.stringWidth(tagline, "Times-Bold", 12)
-            tagline_x = (width - tagline_width) / 2
-            canvas.drawString(tagline_x, margin + 40, tagline)
+                
+                # Add author name in decorative box (like the reference)
+                author_x = width * 0.7
+                author_y = height * 0.15
+                author_width = 100
+                author_height = 40
+                
+                # Draw author background box
+                canvas.setFillColorRGB(0.95, 0.95, 0.9)  # Light beige
+                canvas.roundRect(author_x, author_y, author_width, author_height, 10, fill=1, stroke=1)
+                
+                # Add author text
+                canvas.setFont("Times-Bold", 14)
+                canvas.setFillColorRGB(0.1, 0.5, 0.1)  # Dark green
+                author_text = "Author Name"
+                author_text_width = canvas.stringWidth(author_text, "Times-Bold", 14)
+                author_text_x = author_x + (author_width - author_text_width) / 2
+                canvas.drawString(author_text_x, author_y + 15, author_text)
+                
+                # Add subtitle/tagline at bottom (like the reference)
+                canvas.setFont("Times-Bold", 12)
+                canvas.setFillColorRGB(0.3, 0.3, 0.3)  # Dark gray
+                tagline = "A Magical Adventure Story"
+                tagline_width = canvas.stringWidth(tagline, "Times-Bold", 12)
+                tagline_x = (width - tagline_width) / 2
+                canvas.drawString(tagline_x, margin + 40, tagline)
     
     def _draw_cover_title_overlay(self, canvas, page, width, height):
         """Draw professional cover title styled like the reference image.
@@ -2307,6 +2483,11 @@ class PDFService:
             canvas.setFillColorRGB(1.0, 0.9, 0.0)  # Yellow sun
             canvas.circle(width * 0.9, height * 0.9, 20, fill=1, stroke=0)
             
+            # Use text_font_size from page if available, otherwise default to 1500pt for kids
+            placeholder_font_size = getattr(page, 'text_font_size', 1500)
+            # Scale down for placeholder to fit in cloud (max 72pt for placeholder display)
+            placeholder_font_size = min(placeholder_font_size, 72)
+            
             # Add the story text with fluffy cloud background (manually positioned at top)
             cloud_x = width * 0.1
             cloud_y = height * 0.85
@@ -2322,17 +2503,17 @@ class PDFService:
                 canvas.circle(cloud_x + offset_x + 15, cloud_y + 15, 20, fill=1, stroke=0)
             
             # Add story text inside the cloud
-            canvas.setFont("Times-Bold", 18)
+            canvas.setFont("Times-Bold", placeholder_font_size)
             canvas.setFillColorRGB(0.1, 0.1, 0.5)  # Dark blue text
             
             # Wrap text to fit in cloud
-            text_lines = self._wrap_text_to_lines(canvas, page.text, "Times-Bold", 18, cloud_width * 0.8)
+            text_lines = self._wrap_text_to_lines(canvas, page.text, "Times-Bold", placeholder_font_size, cloud_width * 0.8)
             
             # Draw text lines
-            line_height = 22
+            line_height = int(placeholder_font_size * 1.2)  # Dynamic line height based on font size
             start_y = cloud_y + 10
             for i, line in enumerate(text_lines[:3]):  # Max 3 lines
-                line_width = canvas.stringWidth(line, "Times-Bold", 18)
+                line_width = canvas.stringWidth(line, "Times-Bold", placeholder_font_size)
                 line_x = cloud_x + (cloud_width - line_width) / 2
                 canvas.drawString(line_x, start_y - (i * line_height), line)
             
@@ -2387,7 +2568,7 @@ class PDFService:
             text_x = (width - text_width) / 2
             text_y = height / 2
             canvas.drawString(text_x, text_y, "End Image Not Available")
-        
+    
         # Add "~The End~" text at bottom center
         self._draw_the_end_text(canvas, width, height)
         
